@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#7b4bff">
+    <title>NavAid Mobile - Ultra Fast Object Detection</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --primary: #7b4bff;
+            --surface: #ffffff;
+            --background: #000000;
+            --text: #ffffff;
+        }
+        
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--background);
+            color: var(--text);
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        #app { width: 100%; height: 100%; position: relative; }
+        
+        .camera-container {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: #000;
+        }
+        
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+        
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        
+        .status-bar {
+            position: absolute;
+            top: env(safe-area-inset-top, 12px);
+            left: 0;
+            width: 100%;
+            padding: 8px 12px;
+            z-index: 3;
+        }
+        
+        .status-card {
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 6px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            backdrop-filter: blur(10px);
+        }
+        
+        .voice-feedback {
+            position: absolute;
+            bottom: 80px;
+            left: 12px;
+            right: 12px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            text-align: center;
+            z-index: 3;
+            backdrop-filter: blur(10px);
+            min-height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .controls {
+            position: absolute;
+            bottom: max(12px, env(safe-area-inset-bottom, 12px));
+            left: 0;
+            width: 100%;
+            padding: 12px;
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            z-index: 3;
+        }
+        
+        .control-btn {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.95);
+            border: none;
+            font-size: 18px;
+            color: var(--primary);
+            cursor: pointer;
+            transition: transform 0.1s;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+        
+        .control-btn:active { transform: scale(0.92); }
+        .control-btn.active { background: var(--primary); color: white; }
+        
+        .loading-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+        
+        .loading-screen.hidden { display: none; }
+        
+        .loading-text {
+            margin-top: 16px;
+            font-size: 14px;
+            color: white;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="loading-screen" id="loadingScreen">
+            <svg width="40" height="40" viewBox="0 0 40 40">
+                <circle cx="20" cy="20" r="18" stroke="rgba(123,75,255,0.3)" stroke-width="4" fill="none"/>
+                <circle cx="20" cy="20" r="18" stroke="#7b4bff" stroke-width="4" fill="none" 
+                        stroke-dasharray="113" stroke-dashoffset="113" stroke-linecap="round">
+                    <animate attributeName="stroke-dashoffset" from="113" to="0" dur="1s" repeatCount="indefinite"/>
+                    <animateTransform attributeName="transform" type="rotate" from="0 20 20" to="360 20 20" dur="1s" repeatCount="indefinite"/>
+                </circle>
+            </svg>
+            <div class="loading-text" id="loadingText">Loading Ultra-Fast AI...</div>
+        </div>
+        
+        <div class="camera-container">
+            <video id="video" autoplay playsinline muted></video>
+            <canvas id="overlay"></canvas>
+        </div>
+        
+        <div class="status-bar">
+            <div class="status-card" id="modelStatus">Loading...</div>
+        </div>
+        
+        <div class="voice-feedback" id="voiceFeedback">
+            Ready
+        </div>
+        
+        <div class="controls">
+            <button class="control-btn" id="toggleDetection">▶</button>
+            <button class="control-btn" id="toggleCamera">⏸</button>
+        </div>
+    </div>
+
+<script>
+// Ultra-lightweight implementation - No external dependencies!
+class NavAid {
+    constructor() {
+        this.video = document.getElementById('video');
+        this.overlay = document.getElementById('overlay');
+        this.ctx = this.overlay.getContext('2d');
+        this.modelStatus = document.getElementById('modelStatus');
+        this.voiceFeedback = document.getElementById('voiceFeedback');
+        this.loadingScreen = document.getElementById('loadingScreen');
+        this.loadingText = document.getElementById('loadingText');
+        
+        this.isDetecting = false;
+        this.isCameraPaused = false;
+        this.lastDetectionTime = 0;
+        this.detectionInterval = 200; // Even longer interval for battery saving
+        
+        this.objectCache = new Map();
+        this.cacheTimeout = 5000;
+        
+        this.init();
+    }
+
+    async init() {
+        try {
+            this.updateLoading('Starting camera...');
+            
+            // Start camera first for immediate feedback
+            const cameraSuccess = await this.startCamera();
+            if (!cameraSuccess) return;
+            
+            this.updateLoading('Camera ready - Loading AI...');
+            
+            // Load TensorFlow.js and model dynamically
+            await this.loadAIModel();
+            
+            this.updateLoading('AI ready!');
+            
+            // Hide loading screen quickly
+            setTimeout(() => {
+                this.loadingScreen.classList.add('hidden');
+                this.modelStatus.textContent = 'Ready';
+                this.speak("NavAid ready. Tap start.");
+            }, 300);
+            
+        } catch (error) {
+            console.error('Init error:', error);
+            this.modelStatus.textContent = 'Error';
+            this.loadingText.textContent = 'Please refresh';
+        }
+    }
+
+    updateLoading(text) {
+        if (this.loadingText) {
+            this.loadingText.textContent = text;
+        }
+    }
+
+    async startCamera() {
+        try {
+            // Minimal camera constraints for maximum compatibility
+            const constraints = {
+                video: {
+                    facingMode: 'environment',
+                    width: { ideal: 480 }, // Very low resolution for speed
+                    height: { ideal: 360 },
+                    frameRate: { ideal: 24 } // Lower frame rate
+                }
+            };
+            
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            this.video.srcObject = stream;
+            
+            return new Promise((resolve) => {
+                this.video.onloadedmetadata = () => {
+                    this.video.play().then(() => {
+                        this.overlay.width = this.video.videoWidth;
+                        this.overlay.height = this.video.videoHeight;
+                        resolve(true);
+                    });
+                };
+            });
+        } catch (error) {
+            this.speak("Camera access required");
+            return false;
+        }
+    }
+
+    async loadAIModel() {
+        // Dynamically load only what we need
+        await this.loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js');
+        await this.loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js');
+        
+        // Use the lightest model available
+        this.model = await cocoSsd.load({
+            base: 'lite_mobilenet_v2'
+        });
+    }
+
+    loadScript(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+
+    speak(text) {
+        if (!text || this.isSpeaking) return;
+        
+        this.voiceFeedback.textContent = text;
+        this.isSpeaking = true;
+        
+        // Use minimal speech synthesis
+        const utterance = new SpeechSynthesisUtterance(text.substring(0, 100)); // Limit length
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        
+        utterance.onend = () => {
+            this.isSpeaking = false;
+        };
+        
+        speechSynthesis.speak(utterance);
+    }
+
+    // Ultra-simple object tracking
+    trackObject(detection) {
+        const key = detection.class;
+        const now = Date.now();
+        
+        if (this.objectCache.has(key)) {
+            const cached = this.objectCache.get(key);
+            if (now - cached.timestamp < this.cacheTimeout) {
+                return false; // Skip recently announced objects
+            }
+        }
+        
+        this.objectCache.set(key, { timestamp: now });
+        return true;
+    }
+
+    // Minimal detection processing
+    async processDetection() {
+        if (!this.isDetecting || this.isCameraPaused) return;
+        
+        const now = performance.now();
+        if (now - this.lastDetectionTime < this.detectionInterval) return;
+        
+        this.lastDetectionTime = now;
+        
+        try {
+            const detections = await this.model.detect(this.video);
+            this.drawDetections(detections);
+            this.announceObjects(detections);
+        } catch (error) {
+            // Silent fail for performance
+        }
+        
+        // Continue loop
+        requestAnimationFrame(() => this.processDetection());
+    }
+
+    drawDetections(detections) {
+        // Clear canvas efficiently
+        this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+        
+        // Only draw high-confidence detections
+        detections.forEach(det => {
+            if (det.score < 0.6) return;
+            
+            const [x, y, w, h] = det.bbox;
+            
+            // Minimal drawing operations
+            this.ctx.strokeStyle = '#7b4bff';
+            this.ctx.lineWidth = 2;
+            this.ctx.strokeRect(x, y, w, h);
+            
+            // Only draw label for significant objects
+            if (w > 50 && h > 50) {
+                this.ctx.fillStyle = '#7b4bff';
+                this.ctx.fillRect(x, y - 16, 60, 16);
+                this.ctx.fillStyle = 'white';
+                this.ctx.font = '10px Arial';
+                this.ctx.fillText(det.class, x + 4, y - 4);
+            }
+        });
+    }
+
+    announceObjects(detections) {
+        let closest = null;
+        let minDistance = Infinity;
+        
+        // Find closest object
+        detections.forEach(det => {
+            if (det.score < 0.6) return;
+            
+            const distance = this.estimateDistance(det.bbox[2]);
+            if (distance && distance < minDistance && this.trackObject(det)) {
+                minDistance = distance;
+                closest = {
+                    class: det.class,
+                    distance: distance,
+                    position: this.getPosition(det.bbox[0] + det.bbox[2] / 2)
+                };
+            }
+        });
+        
+        // Announce if found
+        if (closest && minDistance < 5) {
+            const text = `${closest.class} ${closest.distance.toFixed(1)}m ${closest.position}`;
+            this.speak(text);
+            this.vibrate(closest.distance);
+        }
+    }
+
+    estimateDistance(width) {
+        return width > 0 ? (0.5 * 580) / width : null;
+    }
+
+    getPosition(x) {
+        const pos = x / this.overlay.width;
+        return pos < 0.33 ? 'left' : pos > 0.66 ? 'right' : 'ahead';
+    }
+
+    vibrate(distance) {
+        if (navigator.vibrate) {
+            if (distance < 1) navigator.vibrate(300);
+            else if (distance < 2) navigator.vibrate(150);
+        }
+    }
+
+    toggleDetection() {
+        this.isDetecting = !this.isDetecting;
+        
+        const btn = document.getElementById('toggleDetection');
+        btn.textContent = this.isDetecting ? '■' : '▶';
+        btn.classList.toggle('active', this.isDetecting);
+        
+        this.modelStatus.textContent = this.isDetecting ? 'Detecting' : 'Ready';
+        this.speak(this.isDetecting ? "Detection started" : "Detection stopped");
+        
+        if (this.isDetecting) {
+            this.processDetection();
+        } else {
+            this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+        }
+    }
+
+    toggleCamera() {
+        this.isCameraPaused = !this.isCameraPaused;
+        
+        const btn = document.getElementById('toggleCamera');
+        btn.textContent = this.isCameraPaused ? '▶' : '⏸';
+        
+        if (this.isCameraPaused) {
+            this.video.pause();
+            this.speak("Camera paused");
+        } else {
+            this.video.play();
+            this.speak("Camera active");
+        }
+    }
+}
+
+// Initialize app when ready
+let app;
+document.addEventListener('DOMContentLoaded', () => {
+    app = new NavAid();
+    
+    // Event listeners
+    document.getElementById('toggleDetection').addEventListener('click', () => app.toggleDetection());
+    document.getElementById('toggleCamera').addEventListener('click', () => app.toggleCamera());
+    
+    // Save battery when page is hidden
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden && app.isDetecting) {
+            app.isDetecting = false;
+            document.getElementById('toggleDetection').textContent = '▶';
+            document.getElementById('toggleDetection').classList.remove('active');
+        }
+    });
+});
+
+// Prevent zoom and other interactions
+document.addEventListener('touchstart', (e) => {
+    if (e.touches.length > 1) e.preventDefault();
+}, { passive: false });
+
+document.addEventListener('gesturestart', (e) => e.preventDefault());
+document.addEventListener('gesturechange', (e) => e.preventDefault());
+</script>
+</body>
+</html>
