@@ -2,226 +2,296 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>NavAid Mobile - Ultra Fast Object Detection</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavAid Mobile</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        :root {
-            --primary: #7b4bff;
-            --background: #f2eaff;
-            --text: #333;
-            --success: #4CAF50;
-        }
-
-        body {
-            font-family: 'Arial', sans-serif;
-            background: var(--background);
-            color: var(--text);
-            overflow: hidden;
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: Arial, sans-serif; 
+            background: #000; 
+            color: white;
             height: 100vh;
-            display: flex;
-            flex-direction: column;
+            overflow: hidden;
         }
-
-        #app {
-            flex-grow: 1;
-            position: relative;
-        }
-
+        #app { width: 100%; height: 100%; position: relative; }
+        
         .camera-container {
             width: 100%;
             height: 100%;
-            position: absolute;
-            top: 0;
-            left: 0;
             background: #000;
+            position: relative;
         }
-
+        
         #video {
             width: 100%;
             height: 100%;
             object-fit: cover;
-            transform: scaleX(-1); /* Mirror for selfie view */
         }
-
+        
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        
+        .status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 10px;
+            z-index: 10;
+        }
+        
         .controls {
             position: absolute;
-            bottom: 10%;
+            bottom: 30px;
             left: 0;
-            right: 0;
-            padding: 0 15px;
+            width: 100%;
             display: flex;
             justify-content: center;
-            gap: 24px;
-            z-index: 3;
+            gap: 20px;
+            z-index: 10;
         }
-
-        .control-btn {
-            width: 50px;
-            height: 50px;
+        
+        button {
+            width: 60px;
+            height: 60px;
             border-radius: 50%;
-            background: var(--primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            color: white;
-            transition: all 0.2s ease;
+            border: none;
+            background: white;
+            font-size: 20px;
             cursor: pointer;
         }
-
-        .control-btn:active {
-            transform: scale(0.95);
-        }
-
-        .voice-feedback {
+        
+        .loading {
             position: absolute;
-            bottom: 80px;
-            left: 16px;
-            right: 16px;
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 12px 16px;
-            border-radius: 16px;
-            font-weight: 600;
-            text-align: center;
-            z-index: 3;
-            min-height: 44px;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
         }
-
-        @media (max-width: 480px) {
-            .control-btn {
-                width: 40px;
-                height: 40px;
-                font-size: 20px;
-            }
-
-            .voice-feedback {
-                bottom: 70px;
-                font-size: 14px;
-            }
+        
+        .loading.hidden {
+            display: none;
         }
     </style>
 </head>
 <body>
     <div id="app">
+        <div class="loading" id="loading">
+            <h2>NavAid Mobile</h2>
+            <p id="statusText">Starting up...</p>
+        </div>
+        
         <div class="camera-container">
             <video id="video" autoplay playsinline muted></video>
+            <canvas id="overlay"></canvas>
         </div>
-        <div class="voice-feedback" id="voiceFeedback">
-            Voice guidance initializing...
-        </div>
+        
+        <div class="status" id="status">Loading...</div>
+        
         <div class="controls">
-            <button class="control-btn" id="toggleDetection">▶</button>
-            <button class="control-btn" id="toggleCamera">⏸</button>
-            <button class="control-btn" id="toggleFlash">⚡</button>
+            <button id="startBtn">▶</button>
+            <button id="cameraBtn">⏸</button>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
-    <script>
-        let model = null;
-        let isDetecting = false;
-        let isCameraPaused = false;
+<script>
+// Simple mobile-friendly implementation
+class SimpleNavAid {
+    constructor() {
+        this.video = document.getElementById('video');
+        this.overlay = document.getElementById('overlay');
+        this.ctx = this.overlay.getContext('2d');
+        this.status = document.getElementById('status');
+        this.loading = document.getElementById('loading');
+        this.statusText = document.getElementById('statusText');
+        
+        this.isRunning = false;
+        this.isCameraPaused = false;
+        this.model = null;
+        
+        this.init();
+    }
 
-        const video = document.getElementById('video');
-        const voiceFeedback = document.getElementById('voiceFeedback');
-        const toggleDetection = document.getElementById('toggleDetection');
-        const toggleCamera = document.getElementById('toggleCamera');
-        const toggleFlash = document.getElementById('toggleFlash');
-
-        // Initialize the application
-        async function init() {
-            try {
-                await tf.ready();
-                model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-
-                await startCamera();
-                voiceFeedback.textContent = 'NavAid is ready. Tap to start detection.';
-            } catch (error) {
-                voiceFeedback.textContent = 'Failed to initialize. Please refresh.';
-                console.error('Error initializing:', error);
-            }
+    async init() {
+        try {
+            this.updateStatus('Requesting camera...');
+            
+            // Start camera first
+            await this.startCamera();
+            
+            this.updateStatus('Loading AI model...');
+            
+            // Load AI model
+            await this.loadModel();
+            
+            this.updateStatus('Ready!');
+            this.loading.classList.add('hidden');
+            
+            // Setup controls
+            this.setupControls();
+            
+        } catch (error) {
+            this.updateStatus('Error: ' + error.message);
+            console.error('Init error:', error);
         }
+    }
 
-        // Start camera with optimized settings
-        async function startCamera() {
+    updateStatus(text) {
+        this.status.textContent = text;
+        if (this.statusText) {
+            this.statusText.textContent = text;
+        }
+    }
+
+    async startCamera() {
+        try {
+            // Simple camera constraints
             const constraints = {
                 video: {
                     facingMode: 'environment',
                     width: { ideal: 640 },
-                    height: { ideal: 480 },
-                    frameRate: { ideal: 30 }
+                    height: { ideal: 480 }
                 },
                 audio: false
             };
-
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = stream;
-                video.play();
-            } catch (error) {
-                console.error('Camera error:', error);
-                voiceFeedback.textContent = 'Camera access is required.';
-            }
-        }
-
-        // Detection logic
-        async function detectObjects() {
-            if (isDetecting) {
-                const detections = await model.detect(video);
-                processDetections(detections);
-            }
-        }
-
-        function processDetections(detections) {
-            detections.forEach(detection => {
-                if (detection.score >= 0.5) {
-                    const [x, y, width, height] = detection.bbox;
-                    // Draw bounding box
-                    const ctx = video.getContext('2d');
-                    ctx.strokeStyle = '#7b4bff';
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(x, y, width, height);
-                    // Draw label
-                    ctx.fillStyle = '#7b4bff';
-                    ctx.fillText(detection.class, x, y > 10 ? y - 5 : 10);
-                }
+            
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            this.video.srcObject = stream;
+            
+            return new Promise((resolve) => {
+                this.video.onloadeddata = () => {
+                    this.overlay.width = this.video.videoWidth;
+                    this.overlay.height = this.video.videoHeight;
+                    resolve();
+                };
             });
+            
+        } catch (error) {
+            throw new Error('Camera access denied. Please allow camera permissions.');
         }
+    }
 
-        // Toggle detection on/off
-        toggleDetection.addEventListener('click', () => {
-            isDetecting = !isDetecting;
-            toggleDetection.textContent = isDetecting ? '■' : '▶';
-            if (isDetecting) {
-                detectObjects();
+    async loadModel() {
+        // Load TensorFlow.js dynamically
+        await this.loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js');
+        await this.loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js');
+        
+        this.model = await cocoSsd.load();
+    }
+
+    loadScript(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`Failed to load ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+
+    setupControls() {
+        const startBtn = document.getElementById('startBtn');
+        const cameraBtn = document.getElementById('cameraBtn');
+        
+        startBtn.addEventListener('click', () => {
+            this.isRunning = !this.isRunning;
+            startBtn.textContent = this.isRunning ? '■' : '▶';
+            this.updateStatus(this.isRunning ? 'Detecting...' : 'Ready');
+            
+            if (this.isRunning) {
+                this.detectObjects();
             }
         });
-
-        // Pause/resume camera
-        toggleCamera.addEventListener('click', () => {
-            isCameraPaused = !isCameraPaused;
-            if (isCameraPaused) {
-                video.pause();
+        
+        cameraBtn.addEventListener('click', () => {
+            this.isCameraPaused = !this.isCameraPaused;
+            cameraBtn.textContent = this.isCameraPaused ? '▶' : '⏸';
+            
+            if (this.isCameraPaused) {
+                this.video.pause();
             } else {
-                video.play();
+                this.video.play();
             }
         });
+    }
 
-        // Flash toggle
-        toggleFlash.addEventListener('click', () => {
-            alert("Flash toggle is not supported in this environment.");
+    async detectObjects() {
+        if (!this.isRunning) return;
+        
+        try {
+            const detections = await this.model.detect(this.video);
+            this.drawDetections(detections);
+            this.announceDetections(detections);
+        } catch (error) {
+            console.error('Detection error:', error);
+        }
+        
+        // Continue detection loop
+        if (this.isRunning) {
+            setTimeout(() => this.detectObjects(), 500);
+        }
+    }
+
+    drawDetections(detections) {
+        this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+        
+        detections.forEach(det => {
+            if (det.score > 0.5) {
+                const [x, y, width, height] = det.bbox;
+                
+                // Draw bounding box
+                this.ctx.strokeStyle = '#7b4bff';
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(x, y, width, height);
+                
+                // Draw label
+                this.ctx.fillStyle = '#7b4bff';
+                this.ctx.fillRect(x, y - 20, 100, 20);
+                this.ctx.fillStyle = 'white';
+                this.ctx.font = '14px Arial';
+                this.ctx.fillText(det.class + ' ' + (det.score * 100).toFixed(0) + '%', x + 5, y - 5);
+            }
         });
+    }
 
-        // Initialize the app
-        init();
-    </script>
+    announceDetections(detections) {
+        const importantObjects = detections.filter(det => 
+            det.score > 0.6 && 
+            ['person', 'car', 'chair', 'bottle', 'cup'].includes(det.class)
+        );
+        
+        if (importantObjects.length > 0 && 'speechSynthesis' in window) {
+            const object = importantObjects[0];
+            const utterance = new SpeechSynthesisUtterance(object.class + ' detected');
+            utterance.rate = 1.0;
+            speechSynthesis.speak(utterance);
+        }
+    }
+}
+
+// Start the app when page loads
+window.addEventListener('load', () => {
+    new SimpleNavAid();
+});
+
+// Handle errors
+window.addEventListener('error', (event) => {
+    console.error('Global error:', event.error);
+});
+</script>
 </body>
 </html>
